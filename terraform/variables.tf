@@ -151,7 +151,7 @@ variable "instance_type" {
 }
 
 variable "instance_type_overrides" {
-  description = "Bigger or smaller size for single servers, e.g. { \"worker-a\" = \"t3.medium\" }. worker-a runs the k3s control plane, which needs about 4 GB."
+  description = "Bigger or smaller size for single servers, e.g. { \"worker-a\" = \"m7i-flex.large\" }. worker-a runs the k3s control plane, which needs about 4 GB. On a free-tier account only free-tier eligible types are allowed."
   type        = map(string)
   default     = {}
 }
@@ -159,7 +159,7 @@ variable "instance_type_overrides" {
 variable "root_volume_size" {
   description = "Root EBS volume size (GiB) per server."
   type        = number
-  default     = 50
+  default     = 20
 }
 
 # ---------------------------------------------------------------------------

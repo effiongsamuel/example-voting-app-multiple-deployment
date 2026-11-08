@@ -31,5 +31,5 @@ ami_name_filter  = "ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*"
 instance_type    = "t3.small"
 root_volume_size = 20
 
-# worker-a also runs the k3s control plane, so give it more memory
-instance_type_overrides = { "worker-a" = "t3.medium" }
+# worker-a also runs the k3s control plane, so give it more memory (m7i-flex.large: 8 GB, free-tier eligible; t3.medium is not)
+instance_type_overrides = { "worker-a" = "m7i-flex.large" }
