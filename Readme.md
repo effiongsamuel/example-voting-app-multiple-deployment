@@ -1,176 +1,168 @@
-# Example Voting App
+# Example Voting App: 5-Tier Architecture
 
-A small distributed voting application composed of Python, Node.js, .NET,
-Redis, and PostgreSQL. The application demonstrates a vote frontend, an
-asynchronous worker, and a live results frontend.
+This project demonstrates a simple multi-service application built around a
+five-tier architecture. It combines a Python vote frontend, a .NET worker,
+a Node.js results dashboard, Redis for asynchronous messaging, and PostgreSQL
+for durable storage. The repository also includes deployment examples for
+Docker Compose, Docker Swarm, Kubernetes, and Terraform/Ansible on AWS.
 
-## Application architecture
+## 1. Presentation Tier
+
+This tier is responsible for user interaction and output.
+
+- Vote app: Python web interface in [`vote/`](vote)
+- Results app: Node.js dashboard in [`result/`](result)
+
+Responsibilities:
+
+- render the voting screen
+- collect user input
+- display the latest counted results in real time
+- provide the user-facing entry points to the application
+
+## 2. Application Tier
+
+This tier contains the business logic that processes user actions and updates
+system state.
+
+- Vote service: [`vote/app.py`](vote/app.py)
+- Worker service: [`worker/Worker.csproj`](worker/Worker.csproj)
+- Result service: [`result/server.js`](result/server.js)
+
+Responsibilities:
+
+- accept incoming votes from the web client
+- validate and transform vote payloads
+- queue votes for downstream processing
+- aggregate and read results for display
+- coordinate the interaction between the front ends and the data layer
+
+## 3. Messaging Tier
+
+This tier decouples the user-facing components from the data-processing layer.
+
+- Redis: message broker used as the queue between vote submission and tallying
+
+Responsibilities:
+
+- temporarily store submitted votes
+- buffer traffic during processing spikes
+- provide asynchronous communication between producers and consumers
+- improve resilience and decoupling between application components
+
+## 4. Data Tier
+
+This tier stores the persistent application state.
+
+- PostgreSQL database in the application stack
+- Persistent storage is managed through Docker volumes and deployment
+  configuration
+
+Responsibilities:
+
+- persist final vote totals
+- serve result queries for the dashboard
+- maintain durable event history for the app's state
+
+## 5. Deployment and Infrastructure Tier
+
+This tier handles how the application is deployed and operated across different
+runtime environments.
+
+Included deployment options:
+
+- Docker Compose: local development setup
+- Docker Swarm: clustered container deployment
+- Kubernetes manifests: [`k8s-specifications/`](k8s-specifications)
+- Terraform + Ansible: AWS single-host deployment in [`terraform/`](terraform)
+
+Responsibilities:
+
+- package and run services consistently
+- manage networking, ports, and service discovery
+- enable automation and repeatable infrastructure provisioning
+- support multiple deployment models from lab to small-scale production
+
+## Architecture Overview
+
+```text
+┌───────────────────────────────────────────────────────────────────────┐
+│ 5. Deployment & Infrastructure Tier                                  │
+│ Docker Compose | Docker Swarm | Kubernetes | Terraform + Ansible      │
+└───────────────────────────────────────────────────────────────────────┘
+                                │
+                                ▼
+┌───────────────────────────────────────────────────────────────────────┐
+│ 4. Data Tier                                                         │
+│ PostgreSQL                                                            │
+│ Persistent vote storage                                              │
+└───────────────────────────────────────────────────────────────────────┘
+                                │
+                                ▼
+┌───────────────────────────────────────────────────────────────────────┐
+│ 3. Messaging Tier                                                     │
+│ Redis                                                                 │
+│ Vote queue / asynchronous messaging                                   │
+└───────────────────────────────────────────────────────────────────────┘
+                                │
+                                ▼
+┌───────────────────────────────────────────────────────────────────────┐
+│ 2. Application Tier                                                   │
+│ vote app  →  Redis queue  →  worker  →  PostgreSQL                   │
+│ result app reads aggregation data and displays it                   │
+└───────────────────────────────────────────────────────────────────────┘
+                                │
+                                ▼
+┌───────────────────────────────────────────────────────────────────────┐
+│ 1. Presentation Tier                                                  │
+│ Browser UI for voting and result dashboard                            │
+└───────────────────────────────────────────────────────────────────────┘
+```
+
+## Runtime flow
+
+1. A user opens the voting page.
+2. The vote app accepts a selection and sends it into the application flow.
+3. The vote is placed in Redis for asynchronous processing.
+4. The .NET worker consumes the item from Redis.
+5. The worker stores the vote in PostgreSQL.
+6. The result app reads from PostgreSQL and refreshes the live dashboard.
+
+## Architecture Diagram
 
 ![Application architecture](image/architecture.excalidraw.png)
 
-- **Vote**: Python web application where users choose between two options.
-- **Redis**: queue for newly submitted votes.
-- **Worker**: .NET service that reads votes from Redis and writes them to
-  PostgreSQL.
-- **PostgreSQL**: persistent vote store.
-- **Result**: Node.js application that displays the current results.
+## Local deployment with Docker Compose
 
-## Run locally with Docker Compose
+Install [Docker Desktop](https://www.docker.com/products/docker-desktop) or
+Docker Engine with the Compose plugin on Linux.
 
-Install [Docker Desktop](https://www.docker.com/products/docker-desktop), or
-install Docker Engine and the Docker Compose plugin on Linux. From the
-repository root, run:
+From the repository root, start the stack:
 
 ```shell
 docker compose up
 ```
 
-The development Compose file builds the services locally. Open:
+The application is available at:
 
-- Vote: <http://localhost:8082>
-- Results: <http://localhost:8081>
+- Vote app: <http://localhost:8082>
+- Results app: <http://localhost:8081>
 
-To run the pre-built Docker images instead:
+To run the prebuilt image version instead:
 
 ```shell
 docker compose -f docker-compose.images.yml up -d
 ```
 
-The pre-built image deployment uses ports `8080` (vote) and `8081` (results).
-To stop either deployment, run `docker compose down`.
-
-## Single-tier AWS deployment with Terraform and Ansible
-
-This repository includes a one-tier AWS deployment intended for a lab,
-demonstration, or small non-production environment. Terraform creates one
-Ubuntu EC2 instance in one public subnet and assigns it an Elastic IP.
-Ansible then installs Docker and deploys the application with Docker Compose.
-
-![Single-server AWS deployment](image/vote%20and%20result%20app%20single%20server.drawio.png)
-
-The deployment consists of:
-
-```text
-Internet
-   |
-Elastic IP
-   |
-VPC -> public subnet -> EC2 instance
-                          ├── vote
-                          ├── result
-                          ├── worker
-                          ├── Redis
-                          └── PostgreSQL + persistent Docker volume
-```
-
-The default deployment is Docker Compose:
-
-- Vote page: `http://<elastic-ip>:8080`
-- Results page: `http://<elastic-ip>:8081`
-
-The security group exposes only the configured application ports and SSH.
-Redis (`6379`) and PostgreSQL (`5432`) remain internal to the server. The
-same Terraform configuration can optionally install single-node k3s and apply
-the manifests in [`k8s-specifications/`](k8s-specifications), using ports
-`31000` and `31001`.
-
-### Prerequisites
-
-Install and configure:
-
-- An AWS account and credentials available to the AWS provider.
-- Terraform `>= 1.5.0`.
-- An existing EC2 key pair, or a public key if
-  `create_key_pair = true`.
-- Ansible Core on the machine running Terraform:
-  `pipx install ansible-core`.
-
-The configured AWS region defaults to `eu-north-1`. The AMI filter currently
-targets Canonical Ubuntu 26.04 x86_64 images; change
-`ami_name_filter` in [`terraform/terraform.tfvars`](terraform/terraform.tfvars)
-if the selected region does not provide that image.
-
-The Terraform backend uses an existing S3 bucket configured in
-[`terraform/backend.tf`](terraform/backend.tf). Create that bucket first, or
-change the backend configuration to a bucket you control. Do not commit AWS
-credentials, private keys, or Terraform state.
-
-### Deploy
-
-1. Review the values in [`terraform/terraform.tfvars`](terraform/terraform.tfvars).
-   In particular, set `key_name`, `ssh_private_key_path`, and restrict
-   `ssh_allowed_cidrs` to your own administration network where possible.
-2. Initialize and validate Terraform:
-
-   ```shell
-   cd terraform
-   terraform init
-   terraform fmt -check
-   terraform validate
-   ```
-
-3. Review and apply the plan:
-
-   ```shell
-   terraform plan
-   terraform apply
-   ```
-
-   `run_ansible = true` causes Terraform to generate the Ansible inventory and
-   variables, wait for SSH, install Docker, start the Compose stack, and wait
-   for both web applications to respond.
-
-4. Print the URLs and connection details:
-
-   ```shell
-   terraform output
-   ```
-
-   Useful outputs include `vote_url`, `result_url`, `public_ip`, and
-   `ssh_command`.
-
-To deploy k3s instead of Compose, set `deploy_method = "k3s"` and apply again.
-Use `"both"` to deploy both modes, but choose non-overlapping ports if both
-applications are exposed at the same time.
-
-### Re-running Ansible
-
-Terraform normally runs Ansible when the server, deployment method, images, or
-deployment files change. To run it manually after changing the generated
-variables:
+To stop the environment:
 
 ```shell
-cd ansible
-ansible-playbook playbook.yml -e @vars.generated.yml
+docker compose down
 ```
 
-The generated files `ansible/inventory.ini` and
-`ansible/vars.generated.yml` are local deployment artifacts and should not be
-committed.
+## Docker Swarm deployment
 
-### Remove the AWS resources
-
-When the environment is no longer needed, destroy the resources to avoid
-ongoing AWS charges:
-
-```shell
-cd terraform
-terraform destroy
-```
-
-### Scope and production limitations
-
-This is deliberately a **single-tier** deployment, not a highly available
-production architecture. It has one EC2 instance, one Availability Zone, a
-publicly reachable host, and PostgreSQL data stored on the instance's EBS
-volume. It does not provide an Application Load Balancer, managed RDS,
-multi-AZ failover, autoscaling, backups, TLS termination, or zero-downtime
-deployments. Add those services and controls before using the design for
-production workloads.
-
-## Run the app in Docker Swarm
-
-Initialize a swarm if necessary:
+Initialize a swarm if needed:
 
 ```shell
 docker swarm init
@@ -182,10 +174,10 @@ Deploy the stack:
 docker stack deploy --compose-file docker-stack.yml vote
 ```
 
-## Run the app in Kubernetes
+## Kubernetes deployment
 
-The [`k8s-specifications/`](k8s-specifications) directory contains Kubernetes
-Deployments and Services for the voting app:
+The [`k8s-specifications/`](k8s-specifications) directory contains the
+Kubernetes manifests for the application.
 
 ```shell
 kubectl apply -f k8s-specifications/
@@ -193,19 +185,105 @@ kubectl get pods
 kubectl get svc
 ```
 
-The vote app is available on port `31000` and the results app on port `31001`
-when the services are exposed through their configured NodePorts.
+The vote app is exposed on port `31000` and the results app on port `31001`.
 
-Remove the resources with:
+To remove the resources:
 
 ```shell
 kubectl delete -f k8s-specifications/
 ```
 
+## AWS deployment architecture (2 Availability Zones)
+
+This repository includes an AWS reference architecture that is designed around a
+VPC spanning two Availability Zones rather than a single EC2 host. The VPC
+views in the repository show the environment as a distributed network with
+subnets in both `eu-north-1a` and `eu-north-1b`, and the EC2 instance view shows
+servers running across both zones.
+
+### VPC and subnet layout
+
+The AWS VPC diagram in ![`image/vpc.png`](image/vpc.png) shows a VPC named
+`voting-app-dev-vpc` and confirms the network is active in the selected AWS
+region. The VPC details view in ![`image/vpc-details.png`](image/vpc-details.png)
+illustrates the main network structure: the VPC contains multiple subnets split
+across two availability zones, with route tables and network connections for the
+application components. The layout includes separate subnets for the vote,
+result, worker, Redis, and database services, which matches the multi-tier
+application design in this repository.
+
+The resource map in ![`image/vpc-details.png`](image/vpc-details.png) makes the
+multi-AZ design clear:
+
+- one set of subnets in `eu-north-1a`
+- a second set of subnets in `eu-north-1b`
+- routing and connectivity between the app tiers and the public/private network
+  boundaries
+- a VPC topology suitable for deploying the voting stack across isolated AZ
+  segments
+
+### EC2 instances across Availability Zones
+
+The image ![`image/servers in available zone.png`](image/servers%20in%20available%20zone.png)
+shows the EC2 instance view for the region, with the application instances spread
+across both availability zones. The table lists multiple `t3.small` and
+`m7i-flex.large` instances running in `eu-north-1a` and `eu-north-1b`, which
+reflects a two-AZ deployment pattern rather than a single-server design.
+
+This means the AWS architecture represented in the repository is best described as
+an application stack distributed across two availability zones, with the VPC,
+subnets, route tables, and EC2 hosts distributed for resilience and network
+segmentation.
+
+### Terraform and Ansible
+
+The repository also includes Terraform and Ansible automation to provision the
+AWS infrastructure and deploy the application stack. The infrastructure can be
+used as a lab or small non-production deployment model, but the reference
+architecture displayed in the images is a multi-AZ design and not a single-host
+deployment.
+
+### Prerequisites
+
+- AWS account and credentials
+- Terraform `>= 1.5.0`
+- Ansible Core installed on the machine running Terraform
+- Existing EC2 key pair or `create_key_pair = true`
+
+### Deploy
+
+```shell
+cd terraform
+terraform init
+terraform validate
+terraform plan
+terraform apply
+```
+
+Terraform output includes the URLs and connection details for the deployed app.
+
+### Remove the AWS resources
+
+```shell
+cd terraform
+terraform destroy
+```
+
+## Project structure
+
+- [`vote/`](vote) - Python voting UI
+- [`result/`](result) - Node.js results dashboard
+- [`worker/`](worker) - .NET consumer service
+- [`k8s-specifications/`](k8s-specifications) - Kubernetes manifests
+- [`ansible/`](ansible) - automation for deployment
+- [`terraform/`](terraform) - AWS infrastructure as code
+- [`docker-compose.yml`](docker-compose.yml) - local Compose deployment
+- [`docker-stack.yml`](docker-stack.yml) - Docker Swarm deployment
+
 ## Notes
 
-The voting application accepts one vote per client browser. Additional votes
-from the same browser are ignored.
-
-This is an educational example of a distributed application and is not
-intended to be a complete production architecture.
+- The application accepts one vote per client browser.
+- This project is an educational example of a distributed application and
+  infrastructure automation workflow.
+- It is intentionally simple and useful for learning service boundaries,
+  messaging, data persistence, and deployment patterns.
