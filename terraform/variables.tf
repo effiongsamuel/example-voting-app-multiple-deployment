@@ -8,9 +8,14 @@ variable "aws_region" {
 }
 
 variable "project_name" {
-  description = "Short project name, used as a prefix for resource names."
+  description = "Short project name (10 characters at most), used as a prefix for resource names."
   type        = string
   default     = "voting-app"
+
+  validation {
+    condition     = length(var.project_name) <= 10
+    error_message = "project_name must be 10 characters or fewer (load balancer target group names are limited to 32)."
+  }
 }
 
 variable "environment" {
@@ -37,31 +42,53 @@ variable "vpc_cidr" {
   }
 }
 
-variable "availability_zone" {
-  description = "Availability zone for the public subnet and the server."
-  type        = string
-  default     = "eu-north-1a"
+variable "availability_zones" {
+  description = "Two availability zones. vote, result and worker run in both; redis and postgres in the first."
+  type        = list(string)
+  default     = ["eu-north-1a", "eu-north-1b"]
+
+  validation {
+    condition     = length(var.availability_zones) >= 2
+    error_message = "Provide at least two availability zones (the load balancer needs two)."
+  }
+}
+
+variable "single_nat_gateway" {
+  description = "true: one NAT gateway for the whole VPC (cheaper). false: one per AZ (as in the diagram)."
+  type        = bool
+  default     = true
 }
 
 variable "app_allowed_cidrs" {
-  description = "CIDRs allowed to open the vote and result pages."
+  description = "CIDRs allowed to open the vote and result pages through the load balancer."
   type        = list(string)
   default     = ["0.0.0.0/0"]
 }
 
 variable "ssh_allowed_cidrs" {
-  description = "CIDRs allowed to SSH to the server. GitHub Actions needs SSH too, so keep 0.0.0.0/0 while the pipeline deploys."
+  description = "Optional: CIDRs allowed to SSH straight to the PUBLIC servers (vote, result). Private servers are only reachable through the Instance Connect Endpoint. Leave empty to use only the endpoint."
   type        = list(string)
   default     = []
+}
+
+variable "result_listener_port" {
+  description = "Load balancer port for the result page (the vote page is on 80)."
+  type        = number
+  default     = 8081
+
+  validation {
+    condition     = var.result_listener_port != 80 && var.result_listener_port >= 1 && var.result_listener_port <= 65535
+    error_message = "result_listener_port must be 1-65535 and different from 80."
+  }
 }
 
 # ---------------------------------------------------------------------------
 # How the app is deployed
 # ---------------------------------------------------------------------------
 variable "deploy_method" {
-  description = "compose = Docker Compose, k3s = k8s-specifications/ on k3s, both = both side by side."
+  description = "compose = one Docker Compose container per server, k3s = a k3s cluster over the same servers (manifests from k8s-specifications/), both = both side by side."
   type        = string
-  default     = "compose"
+  default     = "both"
 
   validation {
     condition     = contains(["compose", "k3s", "both"], var.deploy_method)
@@ -69,50 +96,41 @@ variable "deploy_method" {
   }
 }
 
-variable "vote_port" {
-  description = "Docker Compose: host port of the vote page."
-  type        = number
-  default     = 8080
-}
-
-variable "result_port" {
-  description = "Docker Compose: host port of the result page."
-  type        = number
-  default     = 8081
-}
-
 variable "k3s_vote_nodeport" {
-  description = "k3s: NodePort of the vote service. Must match nodePort in k8s-specifications/vote-service.yaml."
+  description = "k3s: NodePort of the vote service. Must match nodePort in k8s-specifications/vote-service.yaml. Also the load balancer port."
   type        = number
   default     = 31000
 }
 
 variable "k3s_result_nodeport" {
-  description = "k3s: NodePort of the result service. Must match nodePort in k8s-specifications/result-service.yaml."
+  description = "k3s: NodePort of the result service. Must match nodePort in k8s-specifications/result-service.yaml. Also the load balancer port."
   type        = number
   default     = 31001
 }
 
+# ---------------------------------------------------------------------------
+# Application images (Docker Compose only; k3s uses the images named in k8s-specifications/)
+# ---------------------------------------------------------------------------
 variable "vote_image" {
-  description = "Docker Compose: vote image. Point this at your own registry image if you build one."
+  description = "Vote image. Point this at your own registry image if you build one."
   type        = string
   default     = "dockersamples/examplevotingapp_vote"
 }
 
 variable "result_image" {
-  description = "Docker Compose: result image."
+  description = "Result image."
   type        = string
   default     = "dockersamples/examplevotingapp_result"
 }
 
 variable "worker_image" {
-  description = "Docker Compose: worker image."
+  description = "Worker image."
   type        = string
   default     = "dockersamples/examplevotingapp_worker"
 }
 
 variable "run_ansible" {
-  description = "Run the Ansible playbook automatically once the server exists."
+  description = "Run the Ansible playbook automatically once the servers exist."
   type        = bool
   default     = true
 }
@@ -121,22 +139,27 @@ variable "run_ansible" {
 # Compute
 # ---------------------------------------------------------------------------
 variable "ami_name_filter" {
-  description = "Name filter for the Canonical Ubuntu AMI."
+  description = "Name filter for the Canonical Ubuntu AMI (24.04 LTS)."
   type        = string
-  # default     = "ubuntu/images/hvm-ssd-gp3/ubuntu-resolute-26.04-amd64-server-*"
-  default = "ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*"
+  default     = "ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*"
 }
 
 variable "instance_type" {
-  description = "Instance type for the single server (2 vCPU / 4 GB RAM or more)."
+  description = "Instance type for all eight servers (2 vCPU / 2 GB RAM or more)."
   type        = string
-  default     = "m7i-flex.large"
+  default     = "t3.small"
+}
+
+variable "instance_type_overrides" {
+  description = "Bigger or smaller size for single servers, e.g. { \"worker-a\" = \"t3.medium\" }. worker-a runs the k3s control plane, which needs about 4 GB."
+  type        = map(string)
+  default     = {}
 }
 
 variable "root_volume_size" {
-  description = "Root EBS volume size (GiB). Holds Docker images, k3s and the Postgres data."
+  description = "Root EBS volume size (GiB) per server."
   type        = number
-  default     = 100
+  default     = 50
 }
 
 # ---------------------------------------------------------------------------
