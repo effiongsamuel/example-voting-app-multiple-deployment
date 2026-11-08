@@ -114,11 +114,15 @@ jobs:
       - name: Terraform Apply
         run: terraform apply -input=false -auto-approve tfplan
 
+      # `terraform output` takes ONE name at a time. An output that is null
+      # (for example k3s_vote_url when deploy_method = compose) prints "-".
       - name: Show the app URLs
         run: |
           {
             echo '### Voting app'
             echo '```'
-            terraform output -no-color vote_url result_url k3s_vote_url k3s_result_url
+            for o in vote_url result_url k3s_vote_url k3s_result_url; do
+              echo "$o = $(terraform output -no-color -raw "$o" 2>/dev/null || echo '-')"
+            done
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
