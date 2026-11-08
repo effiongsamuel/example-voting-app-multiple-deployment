@@ -1,0 +1,32 @@
+---
+# Starts the one container this server is responsible for (postgres, redis,
+# worker, vote or result), chosen by the "tier" host variable.
+- name: "{{ tier }} | create the app folder"
+  ansible.builtin.file:
+    path: /opt/voting-app
+    state: directory
+    mode: "0755"
+
+- name: "{{ tier }} | write docker-compose.yml"
+  ansible.builtin.template:
+    src: docker-compose.yml.j2
+    dest: /opt/voting-app/docker-compose.yml
+    mode: "0644"
+
+- name: "{{ tier }} | start the container (pulls newer images, recreates only what changed)"
+  ansible.builtin.command: docker compose -f /opt/voting-app/docker-compose.yml up -d --remove-orphans --pull always
+  register: tier_up
+  changed_when: "'Started' in tier_up.stderr or 'Recreated' in tier_up.stderr or 'Created' in tier_up.stderr"
+
+- name: "{{ tier }} | wait until the service answers on its port"
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ {'postgres': 5432, 'redis': 6379, 'vote': 80, 'result': 80}[tier] }}"
+    timeout: 300
+  when: tier != 'worker'
+
+- name: "{{ tier }} | check that the container is running"
+  ansible.builtin.command: docker compose -f /opt/voting-app/docker-compose.yml ps --status running -q
+  register: tier_running
+  changed_when: false
+  failed_when: tier_running.stdout | trim == ''

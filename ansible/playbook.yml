@@ -1,15 +1,19 @@
 ---
 # Run automatically by Terraform (terraform/ansible.tf), or by hand from this folder:
 #   ansible-playbook playbook.yml -e @vars.generated.yml
-# Safe to re-run. deploy_method (from Terraform) is compose, k3s or both.
+# Safe to re-run. deploy_method (from Terraform) is compose, k3s or both:
+#   compose  one Docker container per server; the "tier" variable (set in the
+#            inventory) decides which one
+#   k3s      one k3s cluster over the same servers, k8s-specifications/ applied
+#            with every pod pinned to the server of its tier
 
-# 1. Wait for the server and install Docker ------------------------------------
-- name: Prepare the server
-  hosts: voting
+# 1. Every server: wait for SSH, install Docker -----------------------------------
+- name: Prepare every server
+  hosts: all
   become: true
   gather_facts: false
   tasks:
-    - name: Wait until SSH works (a new server needs a minute or two)
+    - name: Wait until SSH works (new servers need a minute or two)
       ansible.builtin.wait_for_connection:
         delay: 5
         timeout: 900
@@ -34,41 +38,124 @@
         enabled: true
         state: started
 
-# 2. Docker Compose first (so Docker's networks exist before k3s starts) ---------
-- name: Deploy with Docker Compose
-  hosts: voting
+    - name: Let the ssh user run docker without sudo
+      ansible.builtin.user:
+        name: "{{ ansible_user }}"
+        groups: docker
+        append: true
+
+# 2. Docker Compose first, so Docker's networks exist before k3s starts -------------
+- name: Compose | data tier (redis and postgres)
+  hosts: redis:postgres
   become: true
   gather_facts: false
   tasks:
-    - name: Run the compose tasks
-      ansible.builtin.include_tasks: tasks/deploy_compose.yml
+    - name: Deploy this tier
+      ansible.builtin.include_tasks: tasks/deploy_tier.yml
       when: deploy_method in ['compose', 'both']
 
-# 3. k3s with the manifests in k8s-specifications/ ------------------------------
-- name: Deploy with k3s
-  hosts: voting
+- name: Compose | application tier (worker)
+  hosts: worker
   become: true
   gather_facts: false
   tasks:
-    - name: Run the k3s tasks
-      ansible.builtin.include_tasks: tasks/deploy_k3s.yml
-      when: deploy_method in ['k3s', 'both']
+    - name: Deploy this tier
+      ansible.builtin.include_tasks: tasks/deploy_tier.yml
+      when: deploy_method in ['compose', 'both']
 
-# 4. Summary ------------------------------------------------------------------
-- name: Summary
-  hosts: voting
+- name: Compose | web tier (vote and result)
+  hosts: vote:result
+  become: true
   gather_facts: false
   tasks:
+    - name: Deploy this tier
+      ansible.builtin.include_tasks: tasks/deploy_tier.yml
+      when: deploy_method in ['compose', 'both']
+
+# 3. k3s: control plane, then agents, then the app -------------------------------------
+- name: k3s | control plane
+  hosts: k3s_server
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Install the k3s server
+      ansible.builtin.include_tasks: tasks/k3s_server.yml
+      when: deploy_method in ['k3s', 'both']
+
+- name: k3s | agents (every other server)
+  hosts: k3s_agents
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Join the cluster
+      ansible.builtin.include_tasks: tasks/k3s_agent.yml
+      when: deploy_method in ['k3s', 'both']
+
+- name: k3s | deploy the app
+  hosts: k3s_server
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Apply k8s-specifications with one pod per tier server
+      ansible.builtin.include_tasks: tasks/k3s_apply.yml
+      when: deploy_method in ['k3s', 'both']
+
+# 4. End-to-end check through the load balancer ---------------------------------------
+- name: Check the load balancer
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Compose | wait for the vote page (new load balancers need a few minutes)
+      ansible.builtin.uri:
+        url: "http://{{ alb_dns }}/"
+        status_code: 200
+      register: lb_vote
+      until: lb_vote.status == 200
+      retries: 40
+      delay: 15
+      when: deploy_method in ['compose', 'both']
+
+    - name: Compose | wait for the result page
+      ansible.builtin.uri:
+        url: "http://{{ alb_dns }}:{{ result_listener_port }}/"
+        status_code: 200
+      register: lb_result
+      until: lb_result.status == 200
+      retries: 40
+      delay: 15
+      when: deploy_method in ['compose', 'both']
+
+    - name: k3s | wait for the vote page
+      ansible.builtin.uri:
+        url: "http://{{ alb_dns }}:{{ k3s_vote_nodeport }}/"
+        status_code: 200
+      register: lb_k3s_vote
+      until: lb_k3s_vote.status == 200
+      retries: 40
+      delay: 15
+      when: deploy_method in ['k3s', 'both']
+
+    - name: k3s | wait for the result page
+      ansible.builtin.uri:
+        url: "http://{{ alb_dns }}:{{ k3s_result_nodeport }}/"
+        status_code: 200
+      register: lb_k3s_result
+      until: lb_k3s_result.status == 200
+      retries: 40
+      delay: 15
+      when: deploy_method in ['k3s', 'both']
+
     - name: Docker Compose URLs
       ansible.builtin.debug:
         msg:
-          - "Vote:   http://{{ public_ip }}:{{ vote_port }}"
-          - "Result: http://{{ public_ip }}:{{ result_port }}"
+          - "Vote:   http://{{ alb_dns }}"
+          - "Result: http://{{ alb_dns }}:{{ result_listener_port }}"
       when: deploy_method in ['compose', 'both']
 
     - name: k3s URLs
       ansible.builtin.debug:
         msg:
-          - "Vote (k3s):   http://{{ public_ip }}:{{ k3s_vote_nodeport }}"
-          - "Result (k3s): http://{{ public_ip }}:{{ k3s_result_nodeport }}"
+          - "Vote (k3s):   http://{{ alb_dns }}:{{ k3s_vote_nodeport }}"
+          - "Result (k3s): http://{{ alb_dns }}:{{ k3s_result_nodeport }}"
       when: deploy_method in ['k3s', 'both']
