@@ -42,8 +42,8 @@ jobs:
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           tags: |
-            ghcr.io/${{ env.OWNER }}/example-voting-app-${{ matrix.service }}:${{ github.sha }}
-            ghcr.io/${{ env.OWNER }}/example-voting-app-${{ matrix.service }}:latest
+            ghcr.io/${{ env.OWNER }}/example-voting-app-5tier-${{ matrix.service }}:${{ github.sha }}
+            ghcr.io/${{ env.OWNER }}/example-voting-app-5tier-${{ matrix.service }}:latest
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
 
@@ -58,10 +58,10 @@ jobs:
           owner="${GITHUB_REPOSITORY_OWNER,,}"
           failed=0
           for s in vote result worker; do
-            if docker pull "ghcr.io/${owner}/example-voting-app-${s}:latest" > /dev/null 2>&1; then
-              echo "OK      ghcr.io/${owner}/example-voting-app-${s}:latest"
+            if docker pull "ghcr.io/${owner}/example-voting-app-5tier-${s}:latest" > /dev/null 2>&1; then
+              echo "OK      ghcr.io/${owner}/example-voting-app-5tier-${s}:latest"
             else
-              echo "::error::ghcr.io/${owner}/example-voting-app-${s} is private. Open it under your profile > Packages > Package settings > Change visibility > Public."
+              echo "::error::ghcr.io/${owner}/example-voting-app-5tier-${s} is private. Open it under your profile > Packages > Package settings > Change visibility > Public."
               failed=1
             fi
           done

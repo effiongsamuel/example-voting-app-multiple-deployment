@@ -118,7 +118,7 @@ jobs:
         run: |
           echo "Starting Docker image publication..."
 
-          started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          started_at=$(date -u -d '-1 minute' +%Y-%m-%dT%H:%M:%SZ)
 
           gh workflow run publish-images.yml --ref main
 
