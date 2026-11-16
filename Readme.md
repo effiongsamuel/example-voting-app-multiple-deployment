@@ -1,8 +1,9 @@
 # Example Voting App: five-tier AWS deployment
 
 This project extends a sample voting app into a five-tier deployment on AWS.
-Terraform provisions eight EC2 servers across two Availability Zones, with an
-Application Load Balancer in front of the web tiers. Ansible deploys the
+Terraform provisions the application and data servers across two Availability
+Zones, plus a dedicated `m7i-flex.large` monitoring server when k3s is enabled.
+An Application Load Balancer fronts the web tiers. Ansible deploys the
 application with Docker Compose, k3s and Helm, or both:
 
 ```text
@@ -11,8 +12,10 @@ Browser <- ALB <- result (Node.js) <-----------------------------^
 ```
 
 Vote, result, and worker servers are deployed in both Availability Zones.
-Redis and PostgreSQL each run once in the first zone. The web tiers are
-distributed, but the single Redis and PostgreSQL servers are not highly
+Redis and PostgreSQL each run once in the first zone. With k3s enabled, a
+ninth EC2 server in the first zone runs the monitoring workloads: Prometheus
+and Grafana are scheduled to the dedicated `monitoring` node. The web tiers
+are distributed, but the single Redis and PostgreSQL servers are not highly
 available; this is a lab and demonstration architecture, not a production-ready
 or fully fault-tolerant design.
 
@@ -88,9 +91,11 @@ Stop the Compose stack with `docker compose down`.
 
 ## Deploy to AWS with Terraform and Ansible
 
-The AWS deployment creates a VPC with ten subnets (five tiers across two
-Availability Zones), eight Ubuntu EC2 servers, an internet-facing Application
-Load Balancer, and an EC2 Instance Connect Endpoint for SSH access. The default
+The AWS deployment creates a VPC with eleven subnets, nine Ubuntu EC2 servers
+when k3s is enabled (eight application/data servers and one monitoring server),
+an internet-facing Application Load Balancer, and an EC2 Instance Connect
+Endpoint for SSH access. The monitoring server is private and uses
+`m7i-flex.large`; the Compose-only mode does not create it. The default
 Terraform configuration uses one NAT gateway to reduce cost; set
 `single_nat_gateway = false` in the tfvars file to use one NAT gateway per AZ.
 
@@ -103,9 +108,10 @@ Terraform configuration uses one NAT gateway to reduce cost; set
 Terraform provisions the infrastructure and, with `run_ansible = true`,
 automatically runs Ansible to install Docker and deploy the selected mode:
 
-- `compose`: one Compose service per server, assigned to its tier.
-- `k3s`: one k3s cluster across the servers; Helm schedules pods to their
-  corresponding tier.
+- `compose`: one Compose service per application/data server, assigned to its
+  tier.
+- `k3s`: one k3s cluster across the application, data, and monitoring servers;
+  Helm schedules pods to their corresponding tier.
 - `both`: deploy both modes side by side. They have separate URLs and app data.
 
 The repository currently sets `deploy_method = "both"` in
@@ -151,7 +157,9 @@ terraform output
 The outputs include the ALB URLs, server addresses, and SSH commands. By
 default, Compose uses the ALB on ports `80` (vote) and `8081` (results). The
 k3s/Helm endpoints use ports `31000` (vote), `31001` (results), and `31002`
-(Grafana). The database and Redis ports are not exposed through the ALB.
+(Grafana). Grafana's NodePort is served by the k3s cluster and its pod is
+scheduled onto the dedicated monitoring server. The database and Redis ports
+are not exposed through the ALB.
 
 Terraform also has an automated GitHub Actions workflow at
 [`.github/workflows/terraform.yml`](.github/workflows/terraform.yml). To use
@@ -222,8 +230,9 @@ kubectl delete -f k8s-specifications/
 The chart in [`helm/voting-app/`](helm/voting-app) deploys vote, result, worker,
 Redis, PostgreSQL, and optional Prometheus/Grafana monitoring. For the AWS
 five-tier cluster, use [`values-5tier.yaml`](helm/voting-app/values-5tier.yaml),
-which pins workloads to their tier nodes and spreads replicated web and worker
-pods across hosts.
+which pins workloads to their tier nodes, schedules both monitoring pods onto
+the dedicated `monitoring` server, and spreads replicated web and worker pods
+across hosts.
 
 The database password is provided as a Kubernetes Secret, not stored in the
 chart. In a cluster where Ansible has not already created the Secret, create it
@@ -264,12 +273,14 @@ Helm's `--atomic` option, which automatically rolls back a failed upgrade.
 
 ## Monitoring
 
-The Helm chart enables Prometheus and Grafana by default. Grafana is available
-on port `31002`; Prometheus remains internal to the cluster. Grafana's initial
-admin password is generated during install and stored in the Kubernetes Secret
-`grafana-admin`; do not commit or share the password. Retrieve it with
-appropriate cluster access:
+The Helm chart enables Prometheus and Grafana by default. Both are scheduled on
+the dedicated `m7i-flex.large` monitoring server in the k3s deployment. Grafana
+is available through the load balancer on port `31002`; Prometheus remains
+internal to the cluster. Grafana's initial admin password is generated during
+install and stored in the Kubernetes Secret `grafana-admin`; do not commit or
+share the password. Retrieve it with appropriate cluster access:
 
+![grafa](image/grafana.png)
 ```shell
 kubectl get secret grafana-admin \
   -o jsonpath='{.data.admin-password}' | base64 --decode; echo
