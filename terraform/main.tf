@@ -103,10 +103,12 @@ locals {
   # Load balancer routes. Docker Compose is served on :80 and :<result_listener_port>,
   # k3s (NodePorts) on :<k3s_vote_nodeport> and :<k3s_result_nodeport>.
   lb_routes_all = {
-    "vote"       = { method = "compose", tier = "vote", listener = 80, target = 80, sticky = false }
-    "result"     = { method = "compose", tier = "result", listener = var.result_listener_port, target = 80, sticky = true }
-    "k3s-vote"   = { method = "k3s", tier = "vote", listener = var.k3s_vote_nodeport, target = var.k3s_vote_nodeport, sticky = false }
-    "k3s-result" = { method = "k3s", tier = "result", listener = var.k3s_result_nodeport, target = var.k3s_result_nodeport, sticky = true }
+    "vote"       = { method = "compose", tier = "vote", listener = 80, target = 80, sticky = false, path = "/" }
+    "result"     = { method = "compose", tier = "result", listener = var.result_listener_port, target = 80, sticky = true, path = "/" }
+    "k3s-vote"   = { method = "k3s", tier = "vote", listener = var.k3s_vote_nodeport, target = var.k3s_vote_nodeport, sticky = false, path = "/" }
+    "k3s-result" = { method = "k3s", tier = "result", listener = var.k3s_result_nodeport, target = var.k3s_result_nodeport, sticky = true, path = "/" }
+    # Grafana (monitoring in the Helm chart). Its NodePort answers on every server; the vote servers are the targets.
+    "k3s-mon" = { method = "k3s", tier = "vote", listener = var.grafana_nodeport, target = var.grafana_nodeport, sticky = false, path = "/api/health" }
   }
   lb_routes = { for k, r in local.lb_routes_all : k => r if r.method == "compose" ? local.use_compose : local.use_k3s }
 
@@ -130,6 +132,8 @@ resource "aws_vpc" "main" {
   tags = { Name = "${local.name_prefix}-vpc" }
 }
 
+# vote and result must be reachable from the internet, so their subnets hand out public IPs.
+#trivy:ignore:AWS-0164
 resource "aws_subnet" "tier" {
   for_each = local.subnets
 
@@ -214,6 +218,8 @@ resource "aws_route_table_association" "private" {
 # ---------------------------------------------------------------------------
 # Security groups (one per tier, chained exactly like the traffic flow)
 # ---------------------------------------------------------------------------
+# Outbound traffic stays open: image pulls, apt and the k3s installer need it.
+#trivy:ignore:AWS-0104
 resource "aws_security_group" "alb" {
   name        = "${local.name_prefix}-alb-sg"
   description = "Load balancer: vote and result pages from the internet"
@@ -257,6 +263,8 @@ resource "aws_security_group" "eice" {
   tags = { Name = "${local.name_prefix}-eice-sg" }
 }
 
+# Outbound traffic stays open: image pulls, apt and the k3s installer need it.
+#trivy:ignore:AWS-0104
 resource "aws_security_group" "vote" {
   name        = "${local.name_prefix}-vote-sg"
   description = "Vote servers: HTTP from the load balancer"
@@ -302,6 +310,8 @@ resource "aws_security_group" "vote" {
   tags = { Name = "${local.name_prefix}-vote-sg" }
 }
 
+# Outbound traffic stays open: image pulls, apt and the k3s installer need it.
+#trivy:ignore:AWS-0104
 resource "aws_security_group" "result" {
   name        = "${local.name_prefix}-result-sg"
   description = "Result servers: HTTP from the load balancer"
@@ -348,6 +358,8 @@ resource "aws_security_group" "result" {
 }
 
 # The worker accepts no connections at all except SSH.
+# Outbound traffic stays open: image pulls, apt and the k3s installer need it.
+#trivy:ignore:AWS-0104
 resource "aws_security_group" "worker" {
   name        = "${local.name_prefix}-worker-sg"
   description = "Worker servers: SSH only"
@@ -371,6 +383,8 @@ resource "aws_security_group" "worker" {
   tags = { Name = "${local.name_prefix}-worker-sg" }
 }
 
+# Outbound traffic stays open: image pulls, apt and the k3s installer need it.
+#trivy:ignore:AWS-0104
 resource "aws_security_group" "redis" {
   name        = "${local.name_prefix}-redis-sg"
   description = "Redis: 6379 from vote and worker"
@@ -402,6 +416,8 @@ resource "aws_security_group" "redis" {
   tags = { Name = "${local.name_prefix}-redis-sg" }
 }
 
+# Outbound traffic stays open: image pulls, apt and the k3s installer need it.
+#trivy:ignore:AWS-0104
 resource "aws_security_group" "postgres" {
   name        = "${local.name_prefix}-postgres-sg"
   description = "Postgres: 5432 from worker and result"
@@ -435,6 +451,8 @@ resource "aws_security_group" "postgres" {
 
 # k3s: lets the API (6443), flannel VXLAN (8472/udp), kubelet (10250) and pod
 # traffic flow between the servers. Attached to every server when k3s is used.
+# Outbound traffic stays open: image pulls, apt and the k3s installer need it.
+#trivy:ignore:AWS-0104
 resource "aws_security_group" "k8s_nodes" {
   count       = local.use_k3s ? 1 : 0
   name        = "${local.name_prefix}-k8s-nodes-sg"
@@ -544,11 +562,14 @@ resource "aws_instance" "server" {
 #   Docker Compose: :80 -> vote servers, :<result_listener_port> -> result servers
 #   k3s (NodePort): :<k3s_vote_nodeport> -> vote servers, :<k3s_result_nodeport> -> result servers
 # ---------------------------------------------------------------------------
+# Internet-facing on purpose: it is the public entrance of the app.
+#trivy:ignore:AWS-0053
 resource "aws_lb" "app" {
-  name               = "${local.name_prefix}-alb"
-  load_balancer_type = "application"
-  security_groups    = [aws_security_group.alb.id]
-  subnets            = [aws_subnet.tier["vote-a"].id, aws_subnet.tier["vote-b"].id]
+  drop_invalid_header_fields = true
+  name                       = "${local.name_prefix}-alb"
+  load_balancer_type         = "application"
+  security_groups            = [aws_security_group.alb.id]
+  subnets                    = [aws_subnet.tier["vote-a"].id, aws_subnet.tier["vote-b"].id]
 
   depends_on = [aws_internet_gateway.igw]
 
@@ -574,7 +595,7 @@ resource "aws_lb_target_group" "route" {
   }
 
   health_check {
-    path                = "/"
+    path                = each.value.path
     matcher             = "200"
     interval            = 15
     healthy_threshold   = 2
@@ -584,6 +605,8 @@ resource "aws_lb_target_group" "route" {
   tags = { Name = "${local.name_prefix}-${each.key}-tg" }
 }
 
+# Plain HTTP until you own a domain name and an ACM certificate (then add an HTTPS listener).
+#trivy:ignore:AWS-0054
 resource "aws_lb_listener" "route" {
   for_each = local.lb_routes
 

@@ -18,6 +18,11 @@ output "k3s_result_url" {
   value       = local.use_k3s ? "http://${aws_lb.app.dns_name}:${var.k3s_result_nodeport}" : null
 }
 
+output "grafana_url" {
+  description = "k3s: Grafana dashboards through the load balancer (user admin; password: see instruction.txt). null when deploy_method = compose."
+  value       = local.use_k3s ? "http://${aws_lb.app.dns_name}:${var.grafana_nodeport}" : null
+}
+
 output "k3s_kubectl" {
   description = "Run kubectl on the control plane (SSH first, using ssh_commands[\"worker-a\"])."
   value       = local.use_k3s ? "sudo k3s kubectl get nodes,pods -o wide" : null

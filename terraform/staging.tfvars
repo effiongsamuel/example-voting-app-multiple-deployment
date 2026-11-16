@@ -19,11 +19,16 @@ result_listener_port = 8081
 
 # How the app is deployed: "compose", "k3s" or "both"
 #   compose = one Docker container per server
-#   k3s     = one k3s cluster over the same servers (k8s-specifications/, pods pinned by tier)
+#   k3s     = one k3s cluster over the same servers (Helm chart, pods pinned by tier)
 #   both    = the two side by side (two separate copies of the app, each with its own votes)
 deploy_method       = "k3s"
 k3s_vote_nodeport   = 31000
 k3s_result_nodeport = 31001
+grafana_nodeport    = 31002 # Grafana dashboards (monitoring in the Helm chart)
+
+# GitHub user or organisation that owns the images built by .github/workflows/ci-cd.yml (ghcr.io/<owner>/...)
+github_owner = "effiongsamuel"
+image_tag    = "latest" # first deployment only; CI deploys the commit SHA afterwards
 
 run_ansible = true
 

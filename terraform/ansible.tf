@@ -4,7 +4,7 @@
 #   2. runs ansible-playbook, which installs Docker everywhere and, depending on
 #      var.deploy_method:
 #        compose  one container per server (postgres, redis, worker, vote, result)
-#        k3s      a k3s cluster over the same servers; k8s-specifications/ is
+#        k3s      a k3s cluster over the same servers; the Helm chart in helm/voting-app/ is
 #                 applied with every pod pinned to the server of its tier
 #        both     both of the above side by side
 # Every server (public or private) is reached through the EC2 Instance Connect
@@ -17,10 +17,17 @@ resource "random_password" "k3s_token" {
   special = false
 }
 
+# The database password is generated here and lives only in the (encrypted) remote state
+# and in vars.generated.yml; it is never written to Git.
+resource "random_password" "db" {
+  length  = 32
+  special = false
+}
+
 locals {
   repo_dir    = abspath("${path.module}/..")
   ansible_dir = "${local.repo_dir}/ansible"
-  k8s_dir     = "${local.repo_dir}/k8s-specifications"
+  chart_dir   = "${local.repo_dir}/helm/voting-app"
   key_path    = pathexpand(var.ssh_private_key_path)
 
   ansible_files = setunion(
@@ -29,10 +36,16 @@ locals {
     fileset(local.ansible_dir, "tasks/**"),
     fileset(local.ansible_dir, "templates/**"),
   )
-  k8s_files = fileset(local.k8s_dir, "*.yaml")
+  chart_files = fileset(local.chart_dir, "**")
 
   ansible_hash = sha1(join("", [for f in sort(tolist(local.ansible_files)) : filesha1("${local.ansible_dir}/${f}")]))
-  k8s_hash     = sha1(join("", [for f in sort(tolist(local.k8s_files)) : filesha1("${local.k8s_dir}/${f}")]))
+  chart_hash   = sha1(join("", [for f in sort(tolist(local.chart_files)) : filesha1("${local.chart_dir}/${f}")]))
+
+  # Images built by CI (GHCR names must be lowercase) unless a full reference is given.
+  image_base   = "ghcr.io/${lower(var.github_owner)}/example-voting-app-5tier"
+  vote_image   = var.vote_image != "" ? var.vote_image : "${local.image_base}-vote:${var.image_tag}"
+  result_image = var.result_image != "" ? var.result_image : "${local.image_base}-result:${var.image_tag}"
+  worker_image = var.worker_image != "" ? var.worker_image : "${local.image_base}-worker:${var.image_tag}"
 
   # One inventory group per tier. ansible_host is the instance ID: the
   # ProxyCommand below turns it into an SSH tunnel through the endpoint.
@@ -74,9 +87,13 @@ locals {
     result_listener_port: ${var.result_listener_port}
     redis_ip: "${aws_instance.server["redis-a"].private_ip}"
     db_ip: "${aws_instance.server["postgres-a"].private_ip}"
-    vote_image: "${var.vote_image}"
-    result_image: "${var.result_image}"
-    worker_image: "${var.worker_image}"
+    vote_image: "${local.vote_image}"
+    result_image: "${local.result_image}"
+    worker_image: "${local.worker_image}"
+    image_registry: "ghcr.io/${lower(var.github_owner)}"
+    image_tag: "${var.image_tag}"
+    db_password: "${random_password.db.result}"
+    grafana_nodeport: ${var.grafana_nodeport}
     k3s_token: "${random_password.k3s_token.result}"
     k3s_server_ip: "${aws_instance.server[local.k3s_server_key].private_ip}"
     k3s_vote_nodeport: ${var.k3s_vote_nodeport}
@@ -102,14 +119,15 @@ resource "terraform_data" "ansible_deploy" {
   triggers_replace = [
     join(",", [for k in sort(keys(aws_instance.server)) : aws_instance.server[k].id]),
     var.deploy_method,
-    var.vote_image,
-    var.result_image,
-    var.worker_image,
+    local.vote_image,
+    local.result_image,
+    local.worker_image,
+    var.grafana_nodeport,
     var.result_listener_port,
     var.k3s_vote_nodeport,
     var.k3s_result_nodeport,
     local.ansible_hash,
-    local.k8s_hash,
+    local.chart_hash,
   ]
 
   provisioner "local-exec" {

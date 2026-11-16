@@ -86,7 +86,7 @@ variable "result_listener_port" {
 # How the app is deployed
 # ---------------------------------------------------------------------------
 variable "deploy_method" {
-  description = "compose = one Docker Compose container per server, k3s = a k3s cluster over the same servers (manifests from k8s-specifications/), both = both side by side."
+  description = "compose = one Docker Compose container per server, k3s = a k3s cluster over the same servers (manifests from the Helm chart in helm/voting-app/), both = both side by side."
   type        = string
   default     = "both"
 
@@ -97,36 +97,58 @@ variable "deploy_method" {
 }
 
 variable "k3s_vote_nodeport" {
-  description = "k3s: NodePort of the vote service. Must match nodePort in k8s-specifications/vote-service.yaml. Also the load balancer port."
+  description = "k3s: NodePort of the vote service. Passed to the chart as vote.service.nodePort. Also the load balancer port."
   type        = number
   default     = 31000
 }
 
 variable "k3s_result_nodeport" {
-  description = "k3s: NodePort of the result service. Must match nodePort in k8s-specifications/result-service.yaml. Also the load balancer port."
+  description = "k3s: NodePort of the result service. Passed to the chart as result.service.nodePort. Also the load balancer port."
   type        = number
   default     = 31001
 }
 
 # ---------------------------------------------------------------------------
-# Application images (Docker Compose only; k3s uses the images named in k8s-specifications/)
+# Application images, built by .github/workflows/ci-cd.yml and published to GHCR
 # ---------------------------------------------------------------------------
-variable "vote_image" {
-  description = "Vote image. Point this at your own registry image if you build one."
+variable "github_owner" {
+  description = "GitHub user or organisation whose GHCR packages hold the images (ghcr.io/<github_owner>/example-voting-app-5tier-*)."
   type        = string
-  default     = "dockersamples/examplevotingapp_vote"
+
+  validation {
+    condition     = var.github_owner != "" && var.github_owner != "CHANGE_ME"
+    error_message = "Set github_owner in terraform.tfvars to your GitHub user or organisation name."
+  }
+}
+
+variable "image_tag" {
+  description = "Image tag for the first deployment (CI later deploys the commit SHA)."
+  type        = string
+  default     = "latest"
+}
+
+variable "vote_image" {
+  description = "Docker Compose: full vote image reference. Empty = ghcr.io/<github_owner>/example-voting-app-5tier-vote:<image_tag>."
+  type        = string
+  default     = ""
 }
 
 variable "result_image" {
-  description = "Result image."
+  description = "Docker Compose: full result image reference. Empty = the GHCR image built by CI."
   type        = string
-  default     = "dockersamples/examplevotingapp_result"
+  default     = ""
 }
 
 variable "worker_image" {
-  description = "Worker image."
+  description = "Docker Compose: full worker image reference. Empty = the GHCR image built by CI."
   type        = string
-  default     = "dockersamples/examplevotingapp_worker"
+  default     = ""
+}
+
+variable "grafana_nodeport" {
+  description = "k3s: NodePort of Grafana (monitoring in the Helm chart). Also the load balancer port."
+  type        = number
+  default     = 31002
 }
 
 variable "run_ansible" {
