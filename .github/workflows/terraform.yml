@@ -170,7 +170,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          echo "Terraform completed successfully."
+          echo "Terraform completed successfully. please run check step terraform apply for urls"
           echo "Triggering CI-CD workflow..."
 
           gh workflow run ci-cd.yml --ref main
