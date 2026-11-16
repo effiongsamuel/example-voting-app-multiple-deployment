@@ -4,22 +4,22 @@ name: CI-CD
 # scans it (report only), and on main pushes the image tagged with the commit SHA and deploys with Helm
 # to the 5-tier k3s cluster (through the EC2 Instance Connect Endpoint: the control plane has no public IP).
 on:
-  push:
-    branches: [main]
-    paths:
-      - "vote/**"
-      - "result/**"
-      - "worker/**"
-      - "helm/**"
-      - ".github/workflows/ci-cd.yml"
-  pull_request:
-    branches: [main]
-    paths:
-      - "vote/**"
-      - "result/**"
-      - "worker/**"
-      - "helm/**"
-      - ".github/workflows/ci-cd.yml"
+  # push:
+  #   branches: [main]
+  #   paths:
+  #     - "vote/**"
+  #     - "result/**"
+  #     - "worker/**"
+  #     - "helm/**"
+  #     - ".github/workflows/ci-cd.yml"
+  # pull_request:
+  #   branches: [main]
+  #   paths:
+  #     - "vote/**"
+  #     - "result/**"
+  #     - "worker/**"
+  #     - "helm/**"
+  #     - ".github/workflows/ci-cd.yml"
   workflow_dispatch:
 
 permissions:
@@ -167,25 +167,29 @@ jobs:
 
       # The images are already pushed at this point, so the infrastructure workflow can install them.
       # Set the repository variable AUTO_INFRA to false to switch this off (for example after a destroy).
-      - name: No server yet, so build the infrastructure automatically
-        if: steps.find.outputs.found == 'false'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          AUTO_INFRA: ${{ vars.AUTO_INFRA || 'true' }}
+      # - name: No server yet, so build the infrastructure automatically
+      #   i f: steps.find.outputs.found == 'false'
+      #   env:
+      #     GH_TOKEN: ${{ github.token }}
+      #     AUTO_INFRA: ${{ vars.AUTO_INFRA || 'true' }}
+      #   run: |
+      #     if [ "$AUTO_INFRA" = "false" ]; then
+      #       echo "::warning::No running server named ${SERVER_NAME} and AUTO_INFRA is false. Run the infrastructure workflow yourself."
+      #       exit 0
+      #     fi
+      #     busy=$(( $(gh run list --workflow terraform.yml --status in_progress --json databaseId --jq length) \
+      #            + $(gh run list --workflow terraform.yml --status queued --json databaseId --jq length) ))
+      #     if [ "$busy" -gt 0 ]; then
+      #       echo "The infrastructure workflow is already running."
+      #     else
+      #       gh workflow run terraform.yml --ref main
+      #       echo "Started the infrastructure workflow. It installs the app from the images pushed above."
+      #     fi
+      - name: Verify infrastructure exists
+        if: steps.find.outputs.found != 'true'
         run: |
-          if [ "$AUTO_INFRA" = "false" ]; then
-            echo "::warning::No running server named ${SERVER_NAME} and AUTO_INFRA is false. Run the infrastructure workflow yourself."
-            exit 0
-          fi
-          busy=$(( $(gh run list --workflow terraform.yml --status in_progress --json databaseId --jq length) \
-                 + $(gh run list --workflow terraform.yml --status queued --json databaseId --jq length) ))
-          if [ "$busy" -gt 0 ]; then
-            echo "The infrastructure workflow is already running."
-          else
-            gh workflow run terraform.yml --ref main
-            echo "Started the infrastructure workflow. It installs the app from the images pushed above."
-          fi
-
+          echo "::error::Terraform completed, but the EC2 server was not found."
+          exit 1
       - name: Prepare SSH
         if: steps.find.outputs.found == 'true'
         env:
