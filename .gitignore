@@ -4,3 +4,20 @@ bin/
 obj/
 .vs/
 node_modules/
+
+# secrets and local config: never commit these
+.env
+*.pem
+*.key
+*.tfvars.local
+vars.generated.yml
+inventory.ini
+ssh_config.generated
+
+# terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+tfplan
+crash.log
+

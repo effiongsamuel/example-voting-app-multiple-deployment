@@ -1,0 +1,56 @@
+# Values for the 5-tier project: 8 servers, every pod runs on a server of its own tier.
+# The servers carry the node label tier=<vote|result|worker|redis|postgres> (set when k3s is installed).
+# The images have their own package names, so this project never touches the tier-1 images.
+# Used with:  helm upgrade --install voting helm/voting-app -f helm/voting-app/values-5tier.yaml ...
+
+vote:
+  image: example-voting-app-5tier-vote
+  replicas: 2
+  nodeSelector: { tier: vote }
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: kubernetes.io/hostname
+      whenUnsatisfiable: DoNotSchedule
+      labelSelector:
+        matchLabels:
+          app: vote
+
+result:
+  image: example-voting-app-5tier-result
+  replicas: 2
+  nodeSelector: { tier: result }
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: kubernetes.io/hostname
+      whenUnsatisfiable: DoNotSchedule
+      labelSelector:
+        matchLabels:
+          app: result
+
+worker:
+  image: example-voting-app-5tier-worker
+  replicas: 2
+  nodeSelector: { tier: worker }
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: kubernetes.io/hostname
+      whenUnsatisfiable: DoNotSchedule
+      labelSelector:
+        matchLabels:
+          app: worker
+
+redis:
+  nodeSelector: { tier: redis }
+
+db:
+  nodeSelector: { tier: postgres }
+
+# vote and result run on two servers each, so the autoscaler keeps at least two pods
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 3
+
+# Ansible puts the label monitoring=true on the control plane server (the largest one)
+monitoring:
+  nodeSelector: { monitoring: "true" }

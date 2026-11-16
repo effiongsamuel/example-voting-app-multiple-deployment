@@ -1,0 +1,108 @@
+# Central values file for the voting-app chart. Nothing secret lives here:
+# the database password is read from the existing Kubernetes Secret named in db.existingSecret.
+
+image:
+  # REQUIRED. Registry path holding the three images, in lowercase, e.g. ghcr.io/<github-owner>
+  registry: ""
+  # CI sets this to the git commit SHA. Use a tag that does not exist to rehearse a bad release.
+  tag: latest
+  pullPolicy: IfNotPresent
+
+# Mount every container's root filesystem read-only (small writable emptyDirs are added where needed).
+# Set to false if an app fails to start because it needs to write somewhere unexpected.
+readOnlyRootFilesystem: true
+
+# Lets non-root containers listen on port 80 (pod sysctl net.ipv4.ip_unprivileged_port_start=0).
+allowLowPorts: true
+
+vote:
+  image: example-voting-app-vote
+  replicas: 1
+  runAsUser: 10001
+  containerPort: 80
+  service: { type: NodePort, port: 8080, nodePort: 31000 }
+  resources:
+    requests: { cpu: 50m, memory: 96Mi }
+    limits: { cpu: 500m, memory: 256Mi }
+  nodeSelector: {}
+  topologySpreadConstraints: []
+
+result:
+  image: example-voting-app-result
+  replicas: 1
+  runAsUser: 1000
+  containerPort: 80
+  service: { type: NodePort, port: 8081, nodePort: 31001 }
+  resources:
+    requests: { cpu: 50m, memory: 96Mi }
+    limits: { cpu: 500m, memory: 256Mi }
+  nodeSelector: {}
+  topologySpreadConstraints: []
+
+worker:
+  image: example-voting-app-worker
+  replicas: 1
+  runAsUser: 10001
+  resources:
+    requests: { cpu: 50m, memory: 96Mi }
+    limits: { cpu: 500m, memory: 384Mi }
+  nodeSelector: {}
+  topologySpreadConstraints: []
+
+redis:
+  image: redis:7.2.5-alpine
+  resources:
+    requests: { cpu: 25m, memory: 32Mi }
+    limits: { cpu: 250m, memory: 128Mi }
+  nodeSelector: {}
+
+db:
+  image: postgres:15.7-alpine
+  user: postgres
+  # Name of a Secret you create outside Git (Ansible does it): key POSTGRES_PASSWORD
+  existingSecret: voting-db
+  secretKey: POSTGRES_PASSWORD
+  persistence:
+    enabled: true
+    size: 1Gi
+    storageClass: ""   # empty = the cluster default (local-path on k3s)
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { cpu: 500m, memory: 512Mi }
+  nodeSelector: {}
+
+# CPU based autoscaling for the two web apps (k3s ships metrics-server).
+autoscaling:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 70
+
+# Monitoring: Prometheus collects the metrics, Grafana shows the dashboard.
+# Grafana is on a NodePort; Prometheus stays inside the cluster. The Grafana admin password is generated
+# on the first install and kept in the Secret grafana-admin (it is never in Git).
+monitoring:
+  enabled: true
+  nodeSelector: {}   # e.g. { monitoring: "true" } to run Prometheus and Grafana on one chosen node
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    retention: 3d
+    resources:
+      requests: { cpu: 50m, memory: 128Mi }
+      limits: { cpu: 500m, memory: 512Mi }
+  grafana:
+    image: grafana/grafana:11.3.0
+    service: { type: NodePort, port: 3000, nodePort: 31002 }
+    resources:
+      requests: { cpu: 50m, memory: 128Mi }
+      limits: { cpu: 500m, memory: 384Mi }
+  redisExporter:
+    image: oliver006/redis_exporter:v1.66.0
+    resources:
+      requests: { cpu: 10m, memory: 16Mi }
+      limits: { cpu: 100m, memory: 64Mi }
+  postgresExporter:
+    image: prometheuscommunity/postgres-exporter:v0.15.0
+    resources:
+      requests: { cpu: 10m, memory: 24Mi }
+      limits: { cpu: 100m, memory: 96Mi }
