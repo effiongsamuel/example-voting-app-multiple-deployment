@@ -4,7 +4,7 @@
 # Safe to re-run. deploy_method (from Terraform) is compose, k3s or both:
 #   compose  one Docker container per server; the "tier" variable (set in the
 #            inventory) decides which one
-#   k3s      one k3s cluster over the same servers, k8s-specifications/ applied
+#   k3s      one k3s cluster over the same servers, the Helm chart in helm/voting-app/ applied
 #            with every pod pinned to the server of its tier
 
 # 1. Every server: wait for SSH, install Docker -----------------------------------
@@ -43,6 +43,33 @@
         name: "{{ ansible_user }}"
         groups: docker
         append: true
+
+# 1b. Stop early, with a clear message, if the images cannot be pulled ------------
+- name: Check that the application images can be pulled
+  hosts: k3s_server
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Try to pull each image
+      ansible.builtin.command: "docker pull {{ item }}"
+      loop:
+        - "{{ vote_image }}"
+        - "{{ result_image }}"
+        - "{{ worker_image }}"
+      register: image_pull
+      failed_when: false
+      changed_when: false
+
+    - name: Stop with an explanation if an image cannot be pulled
+      ansible.builtin.fail:
+        msg: >-
+          Cannot pull: {{ image_pull.results | selectattr('rc', 'ne', 0) | map(attribute='item') | list }}.
+          "denied" means the image does not exist yet or the package is private. Fix: (1) push a change in
+          vote/, result/ or worker/ to main and wait until the CI-CD workflow is green, (2) on GitHub open
+          Your profile > Packages, and set each example-voting-app-5tier-* package to Public, (3) check that
+          github_owner in terraform/terraform.tfvars is your GitHub name (the name must match the package
+          path above), then run this workflow again.
+      when: (image_pull.results | selectattr('rc', 'ne', 0) | list | length) > 0
 
 # 2. Docker Compose first, so Docker's networks exist before k3s starts -------------
 - name: Compose | data tier (redis and postgres)
@@ -96,7 +123,7 @@
   become: true
   gather_facts: false
   tasks:
-    - name: Apply k8s-specifications with one pod per tier server
+    - name: Install the Helm chart with one pod per tier server
       ansible.builtin.include_tasks: tasks/k3s_apply.yml
       when: deploy_method in ['k3s', 'both']
 
@@ -158,4 +185,21 @@
         msg:
           - "Vote (k3s):   http://{{ alb_dns }}:{{ k3s_vote_nodeport }}"
           - "Result (k3s): http://{{ alb_dns }}:{{ k3s_result_nodeport }}"
+      when: deploy_method in ['k3s', 'both']
+
+    - name: k3s | wait for Grafana (monitoring, not essential for the app)
+      ansible.builtin.uri:
+        url: "http://{{ alb_dns }}:{{ grafana_nodeport }}/api/health"
+        status_code: 200
+      register: lb_grafana
+      until: lb_grafana.status == 200
+      retries: 20
+      delay: 15
+      failed_when: false
+      when: deploy_method in ['k3s', 'both']
+
+    - name: k3s | Grafana URL
+      ansible.builtin.debug:
+        msg:
+          - "Grafana (k3s): http://{{ alb_dns }}:{{ grafana_nodeport }}   user: admin   ({{ 'answers' if (lb_grafana.status | default(0)) == 200 else 'did not answer yet, see instruction.txt PART 9' }})"
       when: deploy_method in ['k3s', 'both']
