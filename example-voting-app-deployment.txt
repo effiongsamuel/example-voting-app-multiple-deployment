@@ -102,7 +102,7 @@ What the code does:
     updates. When a browser connects, it sends a "Welcome!" message and
     lets the browser subscribe to a channel.
   - Connects to Postgres using the connection string
-    postgres://postgres:postgres@db/postgres. It retries up to 1000 times,
+    postgres://<user>:<password>@db/postgres. It retries up to 1000 times,
     once per second, until the database is ready ("Waiting for db").
   - getVotes runs this query every second:
         SELECT vote, COUNT(id) AS count FROM votes GROUP BY vote
